@@ -1,7 +1,7 @@
 {
   "domain": "nightscout_extended_alt",
   "name": "Nightscout Extended Alt",
-  "version": "0.1.5",
+  "version": "0.2.1",
   "documentation": "https://github.com/example/nightscout-extended-alt",
   "issue_tracker": "https://github.com/example/nightscout-extended-alt/issues",
   "codeowners": [],

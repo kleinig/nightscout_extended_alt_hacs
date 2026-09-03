@@ -62,6 +62,7 @@ class NightscoutCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             engineio_logger=False,
         )
         self._runner: asyncio.Task | None = None
+        self._age_runner: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
         self._connected = False
 
@@ -204,7 +205,7 @@ class NightscoutCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _bootstrap_rest(self) -> None:
         """Load a small current cache so entities do not wait for the next socket event."""
         session = async_get_clientsession(self.hass)
-        params = {"count": "20"}
+        params = {"count": "500"}
         if self.token:
             params["token"] = self.token
 
@@ -338,20 +339,32 @@ class NightscoutCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "alarm_count": len(self.alarms),
         }
 
+    async def _age_tick_loop(self) -> None:
+        """Refresh age sensors once per minute without requiring socket traffic."""
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.sleep(60)
+                if not self._stop_event.is_set():
+                    self.async_set_updated_data(self.snapshot())
+            except asyncio.CancelledError:
+                raise
+
     async def async_start(self) -> None:
         """Start the Socket.IO worker."""
         self._stop_event.clear()
         self._runner = asyncio.create_task(self._socket_loop())
+        self._age_runner = asyncio.create_task(self._age_tick_loop())
 
     async def async_stop(self) -> None:
         """Stop the Socket.IO worker."""
         self._stop_event.set()
-        if self._runner:
-            self._runner.cancel()
-            try:
-                await self._runner
-            except asyncio.CancelledError:
-                pass
+        for task in (self._runner, self._age_runner):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         if self.sio.connected:
             await self.sio.disconnect()
 
