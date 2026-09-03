@@ -382,6 +382,9 @@ def _age_info(c, kind):
             "severity": "unknown",
             "warning_hours": None,
             "critical_hours": None,
+            "event_type": None,
+            "notes": None,
+            "treatment_id": None,
         }
 
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -441,8 +444,8 @@ class AgeSensor(NSBaseSensor):
             "age_hours": info["age_hours"],
             "age_days": info["age_days"],
             "changed_at": info["changed_at"],
-            "event_type": info["event_type"],
-            "notes": info["notes"],
+            "event_type": info.get("event_type"),
+            "notes": info.get("notes"),
             "severity": info["severity"],
             "warning_hours": info["warning_hours"],
             "critical_hours": info["critical_hours"],
