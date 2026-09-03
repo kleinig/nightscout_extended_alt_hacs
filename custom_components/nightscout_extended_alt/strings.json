@@ -1,0 +1,18 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Nightscout",
+        "description": "Connect to a Nightscout instance using its Socket.IO real-time feed.",
+        "data": {
+          "url": "Nightscout URL",
+          "token": "Access token (optional)",
+          "glucose_unit": "Glucose unit"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to Nightscout."
+    }
+  }
+}

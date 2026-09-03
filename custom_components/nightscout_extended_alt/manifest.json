@@ -1,0 +1,13 @@
+{
+  "domain": "nightscout_extended_alt",
+  "name": "Nightscout Extended Alt",
+  "version": "0.1.0",
+  "documentation": "https://github.com/example/nightscout-extended-alt",
+  "issue_tracker": "https://github.com/example/nightscout-extended-alt/issues",
+  "codeowners": [],
+  "config_flow": true,
+  "iot_class": "cloud_push",
+  "requirements": [
+    "python-socketio[asyncio_client]>=5.11.0,<6"
+  ]
+}
