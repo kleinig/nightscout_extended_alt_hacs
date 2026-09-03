@@ -11,6 +11,7 @@ from typing import Any
 import socketio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
@@ -99,17 +100,21 @@ class NightscoutCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.last_event = "connected"
             self.async_set_updated_data(self.snapshot())
 
-        @self.sio.on("dataUpdate")
-        async def data_update(payload=None):
-            if not isinstance(payload, dict):
+        @self.sio.on("dataUpdate", namespace="/")
+        async def data_update(*args):
+            payload = next((arg for arg in args if isinstance(arg, dict)), None)
+            _LOGGER.debug("Nightscout dataUpdate received: %s", self._payload_summary(payload))
+            if payload is None:
                 return
             self._apply_data_update(payload)
             self.last_event = "dataUpdate"
             self.async_set_updated_data(self.snapshot())
 
-        @self.sio.on("retroUpdate")
-        async def retro_update(payload=None):
-            if not isinstance(payload, dict):
+        @self.sio.on("retroUpdate", namespace="/")
+        async def retro_update(*args):
+            payload = next((arg for arg in args if isinstance(arg, dict)), None)
+            _LOGGER.debug("Nightscout retroUpdate received: %s", self._payload_summary(payload))
+            if payload is None:
                 return
             self._apply_data_update(payload)
             self.last_event = "retroUpdate"
@@ -127,6 +132,131 @@ class NightscoutCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.last_alarm = payload
             self.last_event = "alarm.notification"
             self.async_set_updated_data(self.snapshot())
+
+    @staticmethod
+    def _payload_summary(payload: dict[str, Any] | None) -> str:
+        if not isinstance(payload, dict):
+            return repr(payload)
+        return (
+            f"keys={list(payload.keys())}, "
+            f"sgvs={len(payload.get('sgvs') or [])}, "
+            f"treatments={len(payload.get('treatments') or [])}, "
+            f"devicestatus={len(payload.get('devicestatus') or [])}"
+        )
+
+    async def _authorize_socket(self) -> bool:
+        """Authorize the main Nightscout Socket.IO namespace."""
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        def callback(result=None):
+            if not future.done():
+                future.set_result(result if isinstance(result, dict) else {})
+
+        payload = {
+            "client": "web",
+            "secret": None,
+            "token": self.token or None,
+            "history": 48,
+        }
+
+        _LOGGER.debug("Authorizing Nightscout Socket.IO main namespace")
+        try:
+            await self.sio.emit("authorize", payload, namespace="/", callback=callback)
+            result = await asyncio.wait_for(future, timeout=15)
+        except Exception as err:
+            _LOGGER.warning("Nightscout Socket.IO authorization error: %s", err)
+            return False
+
+        _LOGGER.debug("Nightscout Socket.IO authorization response: %s", result)
+        return bool(result.get("read")) if isinstance(result, dict) else False
+
+    async def _subscribe_for_alarms(self) -> bool:
+        """Subscribe to Nightscout alarm notifications."""
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        def callback(result=None):
+            if not future.done():
+                future.set_result(result if isinstance(result, dict) else {})
+
+        payload = {
+            "secret": None,
+            "jwtToken": self.token or None,
+        }
+
+        _LOGGER.debug("Subscribing to Nightscout alarm notifications")
+        try:
+            await self.sio.emit(
+                "subscribe",
+                payload,
+                namespace="/alarm",
+                callback=callback,
+            )
+            result = await asyncio.wait_for(future, timeout=15)
+        except Exception as err:
+            _LOGGER.warning("Nightscout alarm subscription error: %s", err)
+            return False
+
+        _LOGGER.debug("Nightscout alarm subscription response: %s", result)
+        return bool(result.get("success")) if isinstance(result, dict) else False
+
+    async def _bootstrap_rest(self) -> None:
+        """Load a small current cache so entities do not wait for the next socket event."""
+        session = async_get_clientsession(self.hass)
+        params = {"count": "20"}
+        if self.token:
+            params["token"] = self.token
+
+        endpoints = (
+            ("sgvs", "/api/v1/entries.json"),
+            ("treatments", "/api/v1/treatments.json"),
+            ("devicestatus", "/api/v1/devicestatus.json"),
+        )
+
+        for cache_name, endpoint in endpoints:
+            try:
+                async with session.get(
+                    f"{self.url}{endpoint}",
+                    params=params,
+                    timeout=15,
+                ) as response:
+                    if response.status >= 400:
+                        _LOGGER.warning(
+                            "Nightscout bootstrap %s returned HTTP %s",
+                            endpoint,
+                            response.status,
+                        )
+                        continue
+                    data = await response.json()
+                    if not isinstance(data, list):
+                        _LOGGER.warning("Nightscout bootstrap %s returned non-list data", endpoint)
+                        continue
+
+                    if cache_name == "sgvs":
+                        for item in data:
+                            if isinstance(item, dict):
+                                key = str(item.get("_id") or item.get("mills") or time.time_ns())
+                                self.sgvs[key] = item
+                    elif cache_name == "treatments":
+                        for item in data:
+                            if isinstance(item, dict) and item.get("_id"):
+                                self.treatments[str(item["_id"])] = item
+                    else:
+                        for item in data:
+                            if isinstance(item, dict):
+                                key = str(item.get("_id") or item.get("mills") or item.get("date") or time.time_ns())
+                                self.devicestatus[key] = item
+
+                    _LOGGER.debug(
+                        "Nightscout bootstrap %s loaded %d records",
+                        endpoint,
+                        len(data),
+                    )
+            except Exception as err:
+                _LOGGER.warning("Nightscout bootstrap %s failed: %s", endpoint, err)
+
+        self.async_set_updated_data(self.snapshot())
 
     def _apply_data_update(self, payload: dict[str, Any]) -> None:
         self.last_update_ms = _epoch_ms(payload.get("lastUpdated")) or self.last_update_ms
@@ -242,6 +372,16 @@ class NightscoutCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     transports=["polling", "websocket"],
                     wait_timeout=15,
                 )
+
+                # Nightscout does not simply start sending the application data
+                # after the Socket.IO namespace connects. The web client explicitly
+                # authorizes the main socket and subscribes to the alarm namespace.
+                authorized = await self._authorize_socket()
+                if not authorized:
+                    raise RuntimeError("Nightscout Socket.IO authorization failed")
+
+                await self._subscribe_for_alarms()
+                await self._bootstrap_rest()
                 delay = RECONNECT_MIN
 
                 while self.sio.connected and not self._stop_event.is_set():

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
+from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.const import UnitOfTime
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -42,7 +42,7 @@ class NSBaseSensor(CoordinatorEntity[NightscoutCoordinator], SensorEntity):
 
     def __init__(self, coordinator, description, key):
         super().__init__(coordinator)
-        self.entity_description = description
+        self.entity_description = description or SensorEntityDescription(key=key)
         self._key = key
         self._attr_unique_id = f"{coordinator.entry.entry_id}_{key}"
         self._attr_device_info = {
@@ -167,7 +167,7 @@ def _last_bolus(c):
 
 def _mgdl_sensor(c, key, name, getter):
     unit = UNIT_MMOLL if c.glucose_unit == UNIT_MMOLL else UNIT_MGDL
-    return ValueSensor(c, key, name, getter, unit, SensorDeviceClass.BLOOD_GLUCOSE)
+    return ValueSensor(c, key, name, getter, unit)
 
 
 def _make_sensors(c):
